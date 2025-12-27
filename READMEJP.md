@@ -1,79 +1,111 @@
-# Autokaggler  
-### Kaggle チュートリアル自動クリアシステム
+# signate-submitter  
+### JSON 1つで Signate 用 submission を自動生成
 
-Autokaggler は、Kaggle の入門チュートリアル（代表例：Titanic）を  
-**人が操作せずに最後まで自動でクリアするための実験的システム**です。
-
-単なるスクリプト集ではなく、  
-「Kaggle における典型的な勝ち筋」を **再現可能なエージェント構造** として実装しています。
+Autokaggler（Kaggle Titanic 自動化）の発展版として、**Signate コンペ用の提出 CSV を自動生成するエージェント**に拡張しました。  
+ローカルにある train/test を読み込み、前処理・学習・CV・提出ファイル出力までを一気通貫で行います。
 
 ---
 
-## 目的と背景
+## できること
 
-Kaggle のチュートリアルは以下のような課題を持っています。
-
-- 毎回ほぼ同じ前処理・特徴量エンジニアリングを手作業で書く必要がある
-- 初学者にとって「何をやればクリアなのか」が分かりにくい
-- 学習というより“作業”に時間が取られがち
-
-Autokaggler はこれを逆転させ、
-
-> **「考える部分だけを人間がやり、実行はすべて自動化する」**
-
-という思想で設計されています。
-
----
-
-## システム概要
-
-Autokaggler は以下を **一気通貫で自動実行** します。
-
-1. データ取得（Kaggle API / ローカル / フォールバック）
-2. 前処理・特徴量エンジニアリング
-3. モデル選択と学習
-4. クロスバリデーション評価
-5. 提出用 `submission.csv` の生成
-6. ログ・再現性情報の保存
-
-人間は **JSON で方針を渡すだけ** です。
+* データ取得: `dataset_dir` を優先し、なければ同梱の Titanic サンプルにフォールバック
+* タスク判定: `problem_type="auto"` で分類/回帰を自動判別
+* 前処理:
+  * 数値: 中央値補完 + 標準化
+  * カテゴリ: 最頻値補完 + One-Hot
+* モデルプロファイル
+  * `fast`: ロジスティック回帰 / Ridge
+  * `power`: ランダムフォレスト
+  * `boosting`: HistGradientBoosting
+* 5-fold CV でスコアを計算し、`submission.csv` を生成
+* 標準出力に JSON を返し、`tags` に必ず `#KGNINJA` を含める
 
 ---
 
-## 特徴量エンジニアリング（Titanic 例）
+## リポジトリ構成
 
-- 名前からのタイトル抽出
-- 家族サイズ
-- 船室の有無
-- 年齢 × 客室クラス
-- 1人あたり運賃
-
----
-
-## モデルプロファイル
-
-| プロファイル | 内容 |
-|--------------|------|
-| fast | ロジスティック回帰 |
-| power | ランダムフォレスト |
-| boosting | LightGBM / XGBoost |
-| ensemble | 複数モデルのソフト投票 |
-
----
-
-## 実行方法
-
-```bash
-pip install -r requirements.txt
-echo '{"profile": "fast"}' | python -m autokaggler
+```
+src/signate_submitter/    エージェント本体
+data/sample/              Titanic 互換のサンプルデータ
+tests/                    Pytest
+.agent_tmp/, .agent_logs/ 実行時に自動生成
 ```
 
 ---
 
-## 出力
+## 使い方
 
-- .agent_tmp/
-- .agent_logs/
+### 1. インストール
+
+```bash
+pip install -e ".[test]"
+```
+
+### 2. 実行例（ローカルデータを使用）
+
+```bash
+echo '{
+  "data_source": "local",
+  "dataset_dir": "/path/to/signate/dataset",
+  "target_column": "y",
+  "id_column": "id",
+  "profile": "boosting",
+  "submission_name": "submission.csv"
+}' | python -m signate_submitter
+```
+
+`dataset_dir` が無い場合や `data_source="auto"` で失敗した場合はサンプルデータに自動で切り替わります。
+
+### 3. 出力
+
+* `.agent_tmp/signate/submissions/<ファイル名>.csv`
+* `.agent_logs/run-<timestamp>.log`
+* 標準出力の JSON（例）
+  ```json
+  {
+    "ok": true,
+    "meta": {
+      "profile": "boosting",
+      "problem_type": "classification",
+      "tags": ["#KGNINJA"],
+      ...
+    },
+    "result": {
+      "cv_mean": 0.79,
+      "submission_path": ".agent_tmp/signate/submissions/submission.csv"
+    }
+  }
+  ```
+
+---
+
+## TaskInput パラメータ
+
+| 項目 | デフォルト | 説明 |
+|------|-----------|------|
+| `profile` | `"fast"` | `fast` / `power` / `boosting` |
+| `data_source` | `"auto"` | `auto`（local→sample）、`local`、`sample` |
+| `dataset_dir` | `null` | `train.csv` と `test.csv` を含むディレクトリ |
+| `train_filename` | `"train.csv"` | 学習データのファイル名 |
+| `test_filename` | `"test.csv"` | テストデータのファイル名 |
+| `target_column` | `"Survived"` | 目的変数 |
+| `id_column` | `"PassengerId"` | 行ID |
+| `submission_target` | `target_column` | 提出カラム名 |
+| `drop_columns` | `[]` | モデルから除外する列 |
+| `problem_type` | `"auto"` | `classification` / `regression` / `auto` |
+| `random_seed` | `42` | 乱数シード |
+| `submission_name` | 自動生成 | 出力ファイル名 |
+| `notes` | `null` | 任意メモ |
+
+---
+
+## 開発
+
+```bash
+pytest
+```
+
+`.agent_tmp/` と `.agent_logs/` は毎回自動で作成されます。不要になったら削除してください。
 
 ---
 

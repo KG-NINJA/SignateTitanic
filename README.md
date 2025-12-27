@@ -1,155 +1,118 @@
-# Autokaggler  
-### An Automated Kaggle Tutorial Completion System
+# signate-submitter  
+### Generate Signate-ready submissions from a single JSON config
 
-Autokaggler is an experimental system designed to **automatically complete Kaggle beginner tutorials**  
-(such as *Titanic: Machine Learning from Disaster*) **without manual intervention**.
-
-Rather than being a collection of scripts, Autokaggler formalizes  
-**common Kaggle “winning patterns” into a reproducible agent-style pipeline**.
+`signate-submitter` is an agent-style pipeline that turns **Signate competition datasets into ready-to-upload `submission.csv` files**.  
+It extends the original Autokaggler (Kaggle Titanic automation) into a competition-agnostic workflow that still favours simplicity, reproducibility, and low setup overhead.
 
 ---
 
-## Motivation
+## What it does
 
-Most Kaggle tutorials share the same problems:
-
-- Repetitive preprocessing and feature engineering
-- Unclear definition of “what it means to finish”
-- Time spent on boilerplate instead of understanding ideas
-
-Autokaggler flips this model:
-
-> **Humans decide the intent.  
-> The system executes everything else.**
-
----
-
-## What Autokaggler Does
-
-Autokaggler automatically performs the full Kaggle tutorial workflow:
-
-1. Dataset acquisition (Kaggle API / local / fallback)
-2. Data preprocessing
-3. Feature engineering
-4. Model selection and training
-5. Cross-validation evaluation
-6. Submission file (`submission.csv`) generation
-7. Logging and reproducibility tracking
-
-The user only provides a **JSON configuration**.
+* Loads train/test data from a specified directory (or falls back to the bundled Titanic sample)
+* Infers **classification vs regression** (or accepts an explicit setting)
+* Builds a minimal-yet-solid preprocessing & modelling stack
+  * Numeric: median imputation + standard scaling
+  * Categorical: mode imputation + one-hot encoding
+  * Models (profiles):  
+    * `fast`: Logistic Regression (classification) / Ridge (regression)  
+    * `power`: RandomForest  
+    * `boosting`: HistGradientBoosting
+* Runs 5-fold CV and logs the score
+* Writes `submission.csv` with the specified ID + target columns
+* Emits structured JSON output that always carries the `#KGNINJA` tag
 
 ---
 
-## Feature Engineering (Titanic Example)
+## Repository layout
 
-Autokaggler implements canonical Titanic features commonly used in strong Kaggle baselines:
-
-- Title extraction from passenger names
-- Family size (SibSp + Parch)
-- Cabin availability indicator
-- Age × passenger class interaction
-- Fare per person
-
-These features encode **Kaggle community best practices** as executable logic.
+```
+src/signate_submitter/    Core agent & pipeline
+data/sample/              Bundled Titanic-like sample (train/test/schema)
+tests/                    Pytest-based regression checks
+.agent_tmp/, .agent_logs/ Runtime cache and logs (auto-created)
+```
 
 ---
 
-## Model Profiles
+## Quickstart
 
-Execution behavior is controlled by profiles.
+### 1. Install
 
-| Profile | Description |
-|-------|-------------|
-| `fast` | Logistic Regression baseline (fast, minimal) |
-| `power` | Random Forest for stable performance |
-| `boosting` | LightGBM / XGBoost-based high-performance setup |
-| `ensemble` | Soft-voting ensemble of multiple models |
+```bash
+pip install -e ".[test]"
+```
 
-Example configuration:
+### 2. Prepare input
 
-```json
-{
-  "profile": "boosting",
-  "data_source": "auto",
-  "use_ensemble": true
-}
-How to Run
-1. Setup
-bash
-Copy code
-pip install -r requirements.txt
-To use Kaggle datasets directly, place your API key at:
+Provide a JSON config on stdin. Example for a local Signate dataset:
 
-text
-Copy code
-~/.kaggle/kaggle.json
-If not available, Autokaggler falls back to sample data.
+```bash
+echo '{
+  "data_source": "local",
+  "dataset_dir": "/path/to/signate/dataset",
+  "target_column": "y",
+  "id_column": "id",
+  "profile": "power",
+  "problem_type": "auto",
+  "submission_name": "submission.csv"
+}' | python -m signate_submitter
+```
 
-2. Execute
-bash
-Copy code
-echo '{"profile": "fast"}' | python -m autokaggler
-3. Outputs
-.agent_tmp/
+If `dataset_dir` is omitted (or loading fails under `data_source="auto"`), the bundled Titanic sample is used.
 
-Datasets
+### 3. Outputs
 
-submission.csv
+* `.agent_tmp/signate/submissions/<submission-name>.csv`
+* `.agent_logs/run-<timestamp>.log`
+* JSON to stdout:
+  ```json
+  {
+    "ok": true,
+    "meta": {
+      "profile": "power",
+      "problem_type": "classification",
+      "tags": ["#KGNINJA"],
+      ...
+    },
+    "result": {
+      "cv_mean": 0.78,
+      "submission_path": ".agent_tmp/signate/submissions/submission.csv"
+    }
+  }
+  ```
 
-.agent_logs/
+---
 
-Execution logs
+## Configuration reference (`TaskInput`)
 
-Cross-validation scores
+| Field | Default | Description |
+|-------|---------|-------------|
+| `profile` | `"fast"` | `fast` / `power` / `boosting` |
+| `data_source` | `"auto"` | `auto` (local→sample), `local`, `sample` |
+| `dataset_dir` | `null` | Directory containing `train.csv` / `test.csv` |
+| `train_filename` | `"train.csv"` | Custom train filename |
+| `test_filename` | `"test.csv"` | Custom test filename |
+| `target_column` | `"Survived"` | Target column in `train.csv` |
+| `id_column` | `"PassengerId"` | Row identifier column |
+| `submission_target` | `target_column` | Column name for predictions |
+| `drop_columns` | `[]` | Columns to exclude from modelling |
+| `problem_type` | `"auto"` | `classification` / `regression` / `auto` |
+| `random_seed` | `42` | Seed for model + CV |
+| `submission_name` | autogenerated | Output filename |
+| `notes` | `null` | Free-form text appended to logs/metadata |
 
-Feature importance reports
+---
 
-All outputs are fully reproducible.
+## Development
 
-Why This Works
-Autokaggler reliably completes Kaggle tutorials because:
+```bash
+pytest
+```
 
-Beginner competitions have a fixed structure
+The agent auto-creates `.agent_tmp/` and `.agent_logs/` during runs. Clean them up freely between executions.
 
-Effective solution patterns are already known
+---
 
-Human variability is removed from execution
+## License
 
-This is not cheating.
-It is codifying institutional knowledge.
-
-Project Philosophy
-Autokaggler is not a leaderboard optimization tool.
-
-It exists to:
-
-Automate Kaggle learning entry points
-
-Explore AutoML and AI agent architectures
-
-Demonstrate what “task completion by AI” actually means
-
-Possible Extensions
-Support for additional Kaggle beginner competitions
-
-Hyperparameter optimization (Optuna / AutoML integration)
-
-Fully automated Kaggle submission loops
-
-CI/CD integration with GitHub Actions
-
-Summary
-Autokaggler demonstrates a simple idea:
-
-Kaggle tutorials do not need humans to execute them.
-
-The same structure applies beyond Kaggle:
-
-education pipelines
-
-repetitive analysis tasks
-
-autonomous AI agents
-
-License
 MIT License

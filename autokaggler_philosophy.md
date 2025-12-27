@@ -1,5 +1,8 @@
 # PHILOSOPHY.md
-## Why Autokaggler Matters: Understanding the "Heresy" Criticism
+## Why Autokaggler (and signate-submitter) Matters: Understanding the "Heresy" Criticism
+
+> signate-submitter is the Signate-facing evolution of Autokaggler.  
+> The philosophy is unchanged: automate the execution so humans can focus on understanding.
 
 ---
 
