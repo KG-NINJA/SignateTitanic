@@ -1,4 +1,4 @@
-"""Pytest configuration for AutoKaggler tests."""
+"""Pytest configuration for signate-submitter tests."""
 from __future__ import annotations
 
 import sys

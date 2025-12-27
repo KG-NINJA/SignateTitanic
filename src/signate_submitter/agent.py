@@ -1,4 +1,4 @@
-"""Core agent implementation orchestrating the AutoKaggler pipeline."""
+"""Core agent implementation orchestrating the Signate submitter pipeline."""
 
 from __future__ import annotations
 
@@ -10,14 +10,15 @@ import traceback
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
+
+import pandas as pd
 
 from .data_manager import DataManager
-from .pipeline import TitanicPipeline, TitanicPipelineResult
+from .pipeline import SignatePipeline, SignatePipelineResult, TAG
 
 RUNTIME_DIRS = [Path(".agent_tmp"), Path(".agent_logs")]
 DEFAULT_PROFILE = "fast"
-TAG = "#KGNINJA"
 
 
 @dataclass
@@ -25,8 +26,15 @@ class TaskInput:
     """Declarative configuration for a pipeline execution."""
 
     profile: Optional[str] = None
-    force_download: bool = False
     data_source: str = "auto"
+    dataset_dir: Optional[str] = None
+    train_filename: str = "train.csv"
+    test_filename: str = "test.csv"
+    target_column: str = "Survived"
+    id_column: str = "PassengerId"
+    submission_target: Optional[str] = None
+    drop_columns: Iterable[str] = field(default_factory=list)
+    problem_type: str = "auto"
     random_seed: int = 42
     submission_name: Optional[str] = None
     notes: Optional[str] = None
@@ -87,7 +95,7 @@ def resolve_profile(task_input: TaskInput) -> str:
 
     profile = task_input.profile or os.environ.get("PROFILE", DEFAULT_PROFILE)
 
-    if profile not in ("fast", "boosting", "tree", "linear"):
+    if profile not in ("fast", "power", "boosting"):
         logging.warning(
             "Unknown profile '%s'; falling back to default '%s'",
             profile,
@@ -99,20 +107,49 @@ def resolve_profile(task_input: TaskInput) -> str:
     return profile
 
 
-def run_agent(task_input: TaskInput, run_id: str) -> TitanicPipelineResult:
-    """Execute the Titanic pipeline."""
+def resolve_problem_type(task_input: TaskInput, train_df) -> str:
+    """Infer the problem type when set to auto."""
+
+    problem_type = (task_input.problem_type or "auto").lower()
+    if problem_type in {"classification", "regression"}:
+        return problem_type
+
+    target = train_df[task_input.target_column]
+    if target.dtype == bool:
+        return "classification"
+    unique = target.nunique(dropna=True)
+    if pd.api.types.is_integer_dtype(target) and unique <= 20:
+        return "classification"
+    if pd.api.types.is_object_dtype(target):
+        return "classification"
+    return "regression"
+
+
+def run_agent(task_input: TaskInput, run_id: str) -> tuple[SignatePipelineResult, str, str]:
+    """Execute the Signate pipeline."""
 
     data_manager = DataManager(cache_dir=RUNTIME_DIRS[0])
     train_df, test_df, data_meta = data_manager.prepare_datasets(
-        prefer_source=task_input.data_source,
-        force_download=task_input.force_download,
+        data_source=task_input.data_source,
+        dataset_dir=task_input.dataset_dir,
+        train_filename=task_input.train_filename,
+        test_filename=task_input.test_filename,
     )
 
     profile = resolve_profile(task_input)
-
+    problem_type = resolve_problem_type(task_input, train_df)
     submission_name = task_input.submission_name or f"submission-{run_id}.csv"
+    submission_target = task_input.submission_target or task_input.target_column
 
-    pipeline = TitanicPipeline(profile=profile)
+    pipeline = SignatePipeline(
+        profile=profile,
+        random_seed=task_input.random_seed,
+        problem_type=problem_type,
+        target_column=task_input.target_column,
+        id_column=task_input.id_column,
+        submission_target=submission_target,
+        drop_columns=task_input.drop_columns,
+    )
     result = pipeline.run(
         train_df=train_df,
         test_df=test_df,
@@ -121,26 +158,30 @@ def run_agent(task_input: TaskInput, run_id: str) -> TitanicPipelineResult:
         notes=task_input.notes,
         data_meta=data_meta,
     )
-    return result
+    return result, problem_type, profile
 
 
-def build_success_result(run_id: str, log_path: Path, result: TitanicPipelineResult, profile: str) -> AgentResult:
+def build_success_result(
+    run_id: str, log_path: Path, result: SignatePipelineResult, profile: str, problem_type: str
+) -> AgentResult:
     """Construct a success payload."""
 
     meta = {
         "profile": profile,
+        "problem_type": problem_type,
         "run_id": run_id,
         "tags": [TAG],
         "log_file": str(log_path),
         "cache_dir": str(RUNTIME_DIRS[0]),
     }
     payload = {
-        "cv_mean_accuracy": result.cv_mean,
+        "cv_mean": result.cv_mean,
         "cv_std": result.cv_std,
         "model_name": result.model_name,
         "submission_path": result.submission_path,
         "data_source": result.data_source,
         "notes": result.notes,
+        "score_metric": result.score_metric,
     }
     return AgentResult(ok=True, meta=meta, result=payload)
 
@@ -168,7 +209,7 @@ def serialise_result(result: AgentResult) -> str:
 
 
 def main() -> None:
-    """Entry point for executing the AutoKaggler agent."""
+    """Entry point for executing the Signate submitter agent."""
 
     bootstrap()
     run_id = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
@@ -183,9 +224,8 @@ def main() -> None:
         return
 
     try:
-        profile = resolve_profile(task_input)
-        pipeline_result = run_agent(task_input, run_id)
-        result = build_success_result(run_id, log_path, pipeline_result, profile)
+        pipeline_result, problem_type, profile = run_agent(task_input, run_id)
+        result = build_success_result(run_id, log_path, pipeline_result, profile, problem_type)
     except Exception as exc:  # pylint: disable=broad-except
         result = build_failure_result(run_id, log_path, exc)
     print(serialise_result(result))
